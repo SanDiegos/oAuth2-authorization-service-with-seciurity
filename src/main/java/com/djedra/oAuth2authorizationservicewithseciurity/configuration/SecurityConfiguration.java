@@ -1,82 +1,100 @@
 package com.djedra.oAuth2authorizationservicewithseciurity.configuration;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
+import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.oauth2.provider.ClientDetailsService;
-import org.springframework.security.oauth2.provider.approval.ApprovalStore;
-import org.springframework.security.oauth2.provider.approval.TokenApprovalStore;
-import org.springframework.security.oauth2.provider.approval.TokenStoreUserApprovalHandler;
-import org.springframework.security.oauth2.provider.request.DefaultOAuth2RequestFactory;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.provider.token.DefaultTokenServices;
 import org.springframework.security.oauth2.provider.token.TokenStore;
-import org.springframework.security.oauth2.provider.token.store.InMemoryTokenStore;
+import org.springframework.security.oauth2.provider.token.store.JdbcTokenStore;
+import org.springframework.security.oauth2.provider.token.store.JwtAccessTokenConverter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 
 @Configuration
 @EnableWebSecurity
+@EnableGlobalMethodSecurity(prePostEnabled = true)
 public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
-	@Autowired
-	private ClientDetailsService clientDetailsService;
 
-	@Autowired
-	public void globalUserDetails(AuthenticationManagerBuilder auth) throws Exception {
-		auth.inMemoryAuthentication().withUser("admin").password("{noop}adminpass").roles("ADMIN", "USER").and()
-				.withUser("user").password("{noop}userpass").roles("USER");
+	 	@Value("${security.signing-key}")
+	    private String signingKey;
 
-//		wywala: Encoded password does not look like BCrypt
-//		 auth.inMemoryAuthentication()
-//	        .withUser("admin").password(passwordEncoderr().encode("adminpass")).roles("ADMIN","USER").and()
-//	        .withUser("user").password(passwordEncoderr().encode("userpass")).roles("USER");
-	}
+	    @Value("${security.encoding-strength}")
+	    private Integer encodingStrength;
 
-//	@Bean
-//	public PasswordEncoder passwordEncoderr() {
-//		return new BCryptPasswordEncoder(4);
-//	}
+	    @Value("${security.security-realm}")
+	    private String securityRealm;
 
-	@Override
-	@Order(Ordered.HIGHEST_PRECEDENCE)
-	protected void configure(HttpSecurity http) throws Exception {
-		http.sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS).and()
-//		.csrf().disable()
-				.authorizeRequests().antMatchers("/oauth/token").permitAll().antMatchers("/check_token").permitAll()
-				.anyRequest().authenticated().and().httpBasic().realmName(AuthConfiguration.REALM);
-	}
+	    @Autowired
+	    private JdbcTemplate jdbcTemplate;
 
-	@Override
-	@Bean
-	public AuthenticationManager authenticationManagerBean() throws Exception {
-		return super.authenticationManagerBean();
-	}
+	    @Bean
+	    @Override
+	    protected AuthenticationManager authenticationManager() throws Exception {
+	        return super.authenticationManager();
+	    }
 
-	@Bean
-	public TokenStore tokenStore() {
-		return new InMemoryTokenStore();
-	}
+	    @Bean
+	    public BCryptPasswordEncoder passwordEncoder() {
+	        return new BCryptPasswordEncoder();
+	    }
 
-	@Bean
-	@Autowired
-	public TokenStoreUserApprovalHandler userApprovalHandler(TokenStore tokenStore) {
-		TokenStoreUserApprovalHandler handler = new TokenStoreUserApprovalHandler();
-		handler.setTokenStore(tokenStore);
-		handler.setRequestFactory(new DefaultOAuth2RequestFactory(clientDetailsService));
-		handler.setClientDetailsService(clientDetailsService);
-		return handler;
-	}
+	    @Override
+	    protected void configure(HttpSecurity http) throws Exception {
+	        http
+	                .sessionManagement()
+	                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+	                .and()
+	                .httpBasic()
+	                .realmName(securityRealm)
+	                .and()
+	                .csrf()
+	                .disable();
+	    }
 
-	@Bean
-	@Autowired
-	public ApprovalStore approvalStore(TokenStore tokenStore) throws Exception {
-		TokenApprovalStore store = new TokenApprovalStore();
-		store.setTokenStore(tokenStore);
-		return store;
-	}
+	    @Bean
+	    public JwtAccessTokenConverter accessTokenConverter() {
+	        JwtAccessTokenConverter converter = new JwtAccessTokenConverter();
+	        converter.setSigningKey(signingKey);
+	        return converter;
+	    }
+
+
+	    @Bean
+	    public TokenStore tokenStore() {
+	        return new JdbcTokenStore(jdbcTemplate.getDataSource());
+	    }
+
+	    @Bean
+	    @Primary
+	    //Making this primary to avoid any accidental duplication with another token service instance of the same name
+	    public DefaultTokenServices tokenServices() {
+	        DefaultTokenServices defaultTokenServices = new DefaultTokenServices();
+	        defaultTokenServices.setTokenStore(tokenStore());
+	        defaultTokenServices.setSupportRefreshToken(true);
+	        return defaultTokenServices;
+	    }
+
+	    @Bean
+	    public CorsFilter corsFilter() {
+	        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+	        CorsConfiguration config = new CorsConfiguration();
+	        config.setAllowCredentials(true);
+	        config.addAllowedOrigin("*");
+	        config.addAllowedHeader("*");
+	        config.addAllowedMethod("*");
+	        source.registerCorsConfiguration("/**", config);
+	        return new CorsFilter(source);
+	    }
 
 }

@@ -1,82 +1,102 @@
 package com.djedra.oAuth2authorizationservicewithseciurity.configuration;
 
+import javax.sql.DataSource;
+
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.Resource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.DataSourceInitializer;
+import org.springframework.jdbc.datasource.init.DatabasePopulator;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.oauth2.config.annotation.configurers.ClientDetailsServiceConfigurer;
 import org.springframework.security.oauth2.config.annotation.web.configuration.AuthorizationServerConfigurerAdapter;
 import org.springframework.security.oauth2.config.annotation.web.configuration.EnableAuthorizationServer;
 import org.springframework.security.oauth2.config.annotation.web.configurers.AuthorizationServerEndpointsConfigurer;
 import org.springframework.security.oauth2.config.annotation.web.configurers.AuthorizationServerSecurityConfigurer;
-import org.springframework.security.oauth2.provider.approval.UserApprovalHandler;
 import org.springframework.security.oauth2.provider.token.TokenStore;
+import org.springframework.security.oauth2.provider.token.store.JwtAccessTokenConverter;
 
 @Configuration
 @EnableAuthorizationServer
 public class AuthConfiguration extends AuthorizationServerConfigurerAdapter {
 
-	public static String REALM = "CRM_REALM";
-
-	private static final int THIRTY_DAYS = 60 * 60 * 24 * 30;
-
 	@Autowired
 	private TokenStore tokenStore;
 
 	@Autowired
-	private UserApprovalHandler userApprovalHandler;
+	private JwtAccessTokenConverter accessTokenConverter;
 
 	@Autowired
-	@Qualifier("authenticationManagerBean")
 	private AuthenticationManager authenticationManager;
 
-//	{noop} oznacza, że hasło będzie przechowywane jako " plain text" czyli nie zaszyfrowane (nie zalecane w kodzie produkcyjnym). Używa deprecjonowane NoOpPasswordEncoder zamiast DelegatingPasswordEncoder do walidacji hasła
-//		User.withDefaultPasswordEncoder().username("user").password("user").roles("USER").build(); 
-//		User.withUsername("user").password("{noop}user").roles("USER").build();
-//	Powinno się używać PasswordEncoder 
+	@Autowired
+	private UserDetailsService userDetailsService;
 
-//	zwraca token z odpowiednimi credencialami tj. role itp
+	@Autowired
+	private JdbcTemplate jdbcTemplate;
+
+	@Value("classpath:schema.sql")
+	private Resource schemaScript;
+
+	@Value("classpath:data.sql")
+	private Resource dataScript;
+
 	@Override
-	public void configure(ClientDetailsServiceConfigurer clients) throws Exception {
-		clients.inMemory().withClient("diego").secret("{noop}haslo")
-				.authorizedGrantTypes("password", "refresh_token", "client_credentials")
-				.authorities("ROLE_CLIENT", "ROLE_TRUSTED_CLIENT").scopes("read", "write", "trust")
-				.accessTokenValiditySeconds(300).refreshTokenValiditySeconds(THIRTY_DAYS);
-
-//		wywala: java.lang.IllegalArgumentException: There is no PasswordEncoder mapped for the id "null"
-//		clients.inMemory().withClient("diego").secret(passwordEncoder().encode("haslo")).authorities("ROLE_CLIENT", "ROLE_TRUSTED_CLIENT").scopes("all").authorizedGrantTypes("password", "refresh_token", "client_credentials")
-//				.and()
-//				.withClient("diegoRoleClient").secret(passwordEncoder().encode("hasloRoleClient")).authorities("ROLE_CLIENT").scopes("all").authorizedGrantTypes("client_credentials")
-//				.accessTokenValiditySeconds(300).refreshTokenValiditySeconds(THIRTY_DAYS);
-
-//		nie pozwala z grant_type: password
-//		PasswordEncoder encoder =
-//				PasswordEncoderFactories.createDelegatingPasswordEncoder();
-//		
-//		clients.inMemory().withClient("diego").secret(encoder.encode("haslo")).authorities("ROLE_CLIENT", "ROLE_TRUSTED_CLIENT").scopes("all").authorizedGrantTypes("password", "refresh_token", "client_credentials")
-//		.and()
-//		.withClient("diegoRoleClient").secret(encoder.encode("hasloRoleClient")).authorities("ROLE_CLIENT").scopes("all").authorizedGrantTypes("client_credentials")
-//		.accessTokenValiditySeconds(300).refreshTokenValiditySeconds(THIRTY_DAYS);
+	public void configure(ClientDetailsServiceConfigurer configurer) throws Exception {
+		configurer.jdbc(jdbcTemplate.getDataSource());
 	}
-
-//	@Bean
-//	public PasswordEncoder passwordEncoder() {
-//		return new BCryptPasswordEncoder(4);
-//	}
 
 	@Override
 	public void configure(AuthorizationServerEndpointsConfigurer endpoints) throws Exception {
-		endpoints.tokenStore(tokenStore).userApprovalHandler(userApprovalHandler)
-				.authenticationManager(authenticationManager);
+		endpoints.tokenStore(tokenStore).reuseRefreshTokens(false).accessTokenConverter(accessTokenConverter)
+				.authenticationManager(authenticationManager).userDetailsService(userDetailsService);
+
 	}
 
-//	The only goal of this method is to define the realm in the sense of the HTTP/1.1:
-//		The "realm" authentication parameter is reserved for use by authentication schemes that wish to indicate a scope of protection. [...] These realms allow the protected resources on a server to be partitioned into a set of protection spaces, each with its own authentication scheme and/or authorization database.
+//	@Bean
+//    public DataSource dataSource() {
+//        final DriverManagerDataSource dataSource = new DriverManagerDataSource();
+//        dataSource.setDriverClassName(env.getProperty("jdbc.driverClassName"));
+//        dataSource.setUrl(env.getProperty("jdbc.url"));
+//        dataSource.setUsername(env.getProperty("jdbc.user"));
+//        dataSource.setPassword(env.getProperty("jdbc.pass"));
+//        return dataSource;
+//    }
+
+//	 @Override
+//	    public void configure(final ClientDetailsServiceConfigurer clients) throws Exception {
+//	        clients.jdbc(dataSource());
+//	    }
+
+//	 @Override
+//	    public void configure(final AuthorizationServerSecurityConfigurer oauthServer) throws Exception {
+//	        oauthServer.tokenKeyAccess("permitAll()").checkTokenAccess("isAuthenticated()");
+//	    }
 
 	@Override
 	public void configure(AuthorizationServerSecurityConfigurer oauthServer) throws Exception {
-		oauthServer.realm(REALM);
-		oauthServer.checkTokenAccess("permitAll()");
+		oauthServer.tokenKeyAccess("hasAuthority('ROLE_TRUSTED_CLIENT')")
+				.checkTokenAccess("hasAuthority('ROLE_TRUSTED_CLIENT')");
+	}
+
+	@Bean
+	public DataSourceInitializer dataSourceInitializer(DataSource dataSource) {
+		final DataSourceInitializer initializer = new DataSourceInitializer();
+		initializer.setDataSource(dataSource);
+		initializer.setDatabasePopulator(databasePopulator());
+		return initializer;
+	}
+
+	private DatabasePopulator databasePopulator() {
+		final ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+		populator.addScript(schemaScript);
+		populator.addScript(dataScript);
+		return populator;
 	}
 
 }
